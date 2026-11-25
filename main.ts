@@ -106,7 +106,7 @@ type Position = {
   tokens: bigint;
   cost: bigint; // lamports paid in (curve fees included), from account
   entrySlot: number;
-  entryPrice: Rational; // fill price (quote/token from the buy fill); exits are measured against this, not the fee-loaded cost
+  entryPrice: Rational; // market fill price ((quote - fee) / tokens from the buy fill); exits are measured against this, not the fee-loaded cost
   lane: string;
   exiting: boolean;
   exitReason: string;
@@ -366,11 +366,22 @@ async function main(): Promise<void> {
         if (fill.status === "filled") {
           const p = positions.get(mint);
           const lane = typeof f.client_id === "string" && f.client_id.startsWith("b45-") ? "e45" : "e20";
+          // Market entry price: the fill's quote_lamports is what the bot
+          // paid INCLUDING curve fees (paid = curve quote + protocol +
+          // creator fee), and fee_lamports is the fee part, so the pure
+          // market price at fill is (quote - fee) / tokens. Exits are
+          // measured against this market price; the ~1.25% fee load must
+          // not sit inside the take-profit threshold or a grind top that
+          // peaks +10% over the market fill price is missed by a hair.
+          const marketQuote =
+            fill.quoteLamports > fill.feeLamports
+              ? fill.quoteLamports - fill.feeLamports
+              : fill.quoteLamports;
           const info = {
             entrySlot: fill.slot,
             entryPrice:
-              fill.tokenAmount > 0n && fill.quoteLamports > 0n
-                ? { n: fill.quoteLamports, d: fill.tokenAmount }
+              fill.tokenAmount > 0n && marketQuote > 0n
+                ? { n: marketQuote, d: fill.tokenAmount }
                 : { n: 0n, d: 1n },
             lane,
           };
@@ -387,7 +398,10 @@ async function main(): Promise<void> {
         if (fill.status === "filled") {
           const p = positions.get(mint);
           if (p !== undefined) {
-            const net = fill.quoteLamports - fill.feeLamports - fill.txFeeLamports;
+            // A sell fill's quote_lamports is already net of curve fees
+            // (proceeds = curve quote - protocol - creator fee); only the
+            // tx fee still comes off. (Do not subtract fee_lamports again.)
+            const net = fill.quoteLamports - fill.txFeeLamports;
             const pnl = net - p.cost;
             roundTripped.add(mint);
             cooldownUntil.set(mint, slot + (pnl <= 0n ? COOLDOWN_LOSS_SLOTS : COOLDOWN_WIN_SLOTS));
@@ -438,11 +452,12 @@ async function main(): Promise<void> {
           prev.tokens = tokens;
           prev.cost = cost;
           // NOTE: entryPrice is deliberately NOT overwritten from cost here.
-          // Cost loads the curve + tx fees (~1.3%) onto the entry price, so
+          // Cost loads the curve fees (~1.25%) onto the entry price, so
           // a +10% take-profit measured against cost needs a +11.4% market
           // move and can miss a grind top by a hair. Take-profit and
-          // stop-loss are measured against the fill price (quote/token from
-          // the buy fill); cost is kept only for realized-PnL accounting.
+          // stop-loss are measured against the market fill price
+          // ((quote - fee) / tokens from the buy fill); cost is kept only
+          // for realized-PnL accounting.
         }
       }
       for (const [mint, p] of positions) {
