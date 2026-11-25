@@ -45,17 +45,37 @@ and only enters after the move has proved it can hold:
 - Drawdown guard on marked equity: buy sizes halve past **20%** drawdown,
   no new buys past **35%** (exits only).
 - **1 SOL** cash reserve is always kept.
-- Buy slippage **300 bps**, sell slippage **500 bps** so exits execute.
+- Buy slippage **300 bps**, sell slippage **1000 bps** so exits execute
+  during fast moves; a rejected or failed sell is retried on the next batch
+  instead of stranding the position until the window-end flatten.
+- Exits are measured against the market fill price
+  (`(quote_lamports - fee_lamports) / token_amount` from the buy fill), not
+  the fee-loaded cost — the ~1.25% curve fee must not sit inside the
+  take-profit threshold.
 - Orders resolve 2 slots after the batch they were decided on; buys are
   sized against decision-time real reserves.
 
 ## Dev-window results (kit grader, `grade-local --driver process`)
 
-See the submission notes for the exact numbers from the local grading run.
-On the dev window the E45 lane alone won 76.9% of its round trips; the
-combined two-lane bot is tuned for a positive net PnL with low drawdown
-rather than maximum PnL. No number in this README is a promise about the
-final 6-hour window — the dev window is one small sample.
+Local grading on the kit's frozen 24-hour dev window (bot code as submitted;
+only this README text changed after the grading run, the bot is identical):
+
+- Net PnL **+0.153834230 SOL** (return +0.015383423), Sharpe (hourly)
+  **+0.225063864**, Sortino +0.520106520, max drawdown 0.006293730.
+- **40 round trips** over **37 distinct mints** (guardrail: >= 20 mints,
+  <= 50% drawdown — met), win rate 0.700000000, 80 fills, 5 rejected,
+  1 failed tx.
+- Fees 0.089568684 SOL curve + 0.008505000 SOL tx; at 2x fees net PnL is
+  still **+0.054878280 SOL**.
+- 90% bootstrap interval -0.021024554 .. +0.332951635 SOL — the positive
+  dev PnL is thin and leans on a few coins (top 3 winners +0.0454 /
+  +0.0448 / +0.0339 SOL); the stress copies show the same.
+- `result_sha256` for this dev grade is local-only: the server grades on
+  Node v26.13.1 (this machine runs v24.22.1) and in its docker sandbox, so
+  the server's hash will differ.
+
+No number here is a promise about the final 6-hour window — the dev window
+is one small sample.
 
 ## Run locally
 
