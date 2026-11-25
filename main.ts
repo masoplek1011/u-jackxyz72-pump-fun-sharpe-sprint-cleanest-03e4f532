@@ -34,7 +34,8 @@
 //   - Orders resolve 2 slots after the batch they were decided on, so the
 //     bot sizes buys against the decision-time real reserves (cap: 100 bps
 //     of real reserves per mint per reply) and uses 300 bps slippage on
-//     buys, 500 bps on sells so exits reliably execute.
+//     buys, 1000 bps on sells so exits reliably execute; a rejected or
+//     failed sell is retried on the next batch, never stranded.
 
 import * as readline from "node:readline";
 
@@ -66,7 +67,7 @@ const STOP_LOSS_BPS = 600n; // -6%
 const MAX_HOLD_SLOTS = 600;
 
 const BUY_SLIPPAGE_BPS = 300;
-const SELL_SLIPPAGE_BPS = 500;
+const SELL_SLIPPAGE_BPS = 1000; // wide so exits execute during fast moves instead of rejecting and stranding the position
 const MAX_BUY_BPS_OF_REAL_RESERVE = 90n; // keep under the 100 bps cap
 const MIN_BUY_LAMPORTS = 10_000_000n; // 0.01 SOL, the round-trip floor
 const CASH_RESERVE_LAMPORTS = 1_000_000_000n; // keep >= 1 SOL cash
@@ -390,6 +391,15 @@ async function main(): Promise<void> {
             const pnl = net - p.cost;
             roundTripped.add(mint);
             cooldownUntil.set(mint, slot + (pnl <= 0n ? COOLDOWN_LOSS_SLOTS : COOLDOWN_WIN_SLOTS));
+          }
+        } else {
+          // A rejected or failed sell leaves the position open: clear the
+          // exiting flag so the exit logic retries on the next batch instead
+          // of stranding the position until the window-end flatten.
+          const p = positions.get(mint);
+          if (p !== undefined) {
+            p.exiting = false;
+            p.exitReason = "";
           }
         }
       }
