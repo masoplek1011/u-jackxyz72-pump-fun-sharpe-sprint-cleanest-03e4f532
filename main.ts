@@ -106,7 +106,7 @@ type Position = {
   tokens: bigint;
   cost: bigint; // lamports paid in (curve fees included), from account
   entrySlot: number;
-  entryPrice: Rational; // cost / tokens
+  entryPrice: Rational; // fill price (quote/token from the buy fill); exits are measured against this, not the fee-loaded cost
   lane: string;
   exiting: boolean;
   exitReason: string;
@@ -424,7 +424,12 @@ async function main(): Promise<void> {
             tokens,
             cost,
             entrySlot: info?.entrySlot ?? slot,
-            entryPrice: tokens > 0n ? { n: cost, d: tokens } : { n: 0n, d: 1n },
+            entryPrice:
+              info !== undefined && info.entryPrice.n > 0n
+                ? info.entryPrice
+                : tokens > 0n
+                  ? { n: cost, d: tokens }
+                  : { n: 0n, d: 1n },
             lane: info?.lane ?? "unknown",
             exiting: false,
             exitReason: "",
@@ -432,7 +437,12 @@ async function main(): Promise<void> {
         } else {
           prev.tokens = tokens;
           prev.cost = cost;
-          if (tokens > 0n) prev.entryPrice = { n: cost, d: tokens };
+          // NOTE: entryPrice is deliberately NOT overwritten from cost here.
+          // Cost loads the curve + tx fees (~1.3%) onto the entry price, so
+          // a +10% take-profit measured against cost needs a +11.4% market
+          // move and can miss a grind top by a hair. Take-profit and
+          // stop-loss are measured against the fill price (quote/token from
+          // the buy fill); cost is kept only for realized-PnL accounting.
         }
       }
       for (const [mint, p] of positions) {
